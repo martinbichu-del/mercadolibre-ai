@@ -20,8 +20,23 @@ export default async (request) => {
 
     const dateTo = new Date();
     const dateFrom = new Date(Date.now() - 30 * 86400000);
-    const orders = await meli(`/orders/search?seller=${user.id}&order.date_created.from=${encodeURIComponent(dateFrom.toISOString())}&order.date_created.to=${encodeURIComponent(dateTo.toISOString())}&sort=date_desc&limit=50`);
-    const orderRows = orders.results || [];
+    // Mercado Libre pagina las órdenes. La versión anterior solo leía las primeras 50,
+    // por eso los totales quedaban incompletos. Recorremos todas las páginas del período.
+    const orderRows = [];
+    const limit = 50;
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total) {
+      const page = await meli(`/orders/search?seller=${user.id}&order.date_created.from=${encodeURIComponent(dateFrom.toISOString())}&order.date_created.to=${encodeURIComponent(dateTo.toISOString())}&sort=date_desc&limit=${limit}&offset=${offset}`);
+      const results = page.results || [];
+      orderRows.push(...results);
+      total = Number(page.paging?.total ?? orderRows.length);
+      offset += results.length;
+
+      // Evita un bucle infinito si la API devuelve una página vacía.
+      if (!results.length) break;
+    }
     const paid = orderRows.filter(o => o.status === 'paid' || o.status === 'confirmed');
     const revenue = paid.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
     const units = paid.reduce((sum, o) => sum + (o.order_items || []).reduce((s, i) => s + Number(i.quantity || 0), 0), 0);

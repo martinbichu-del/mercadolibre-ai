@@ -1,4 +1,4 @@
-# Rocko's Intelligence v4
+# Rocko's Intelligence v4.1
 
 Primera versión funcional para conectar una cuenta de Mercado Libre con Netlify, visualizar publicaciones, ventas y stock, y consultar los datos mediante OpenAI.
 
@@ -38,3 +38,10 @@ Para el sitio configurado actualmente:
 ## Alcance actual
 
 Esta versión lee datos reales de Mercado Libre después de autorizar la cuenta. La comparación con competidores, rentabilidad con costos y automatizaciones quedan para la siguiente etapa.
+
+
+## Corrección v4.1
+
+- Se agregó paginación completa de órdenes de Mercado Libre.
+- El dashboard ya no queda limitado a las primeras 50 operaciones.
+- Las ventas, unidades y facturación procesan todas las órdenes del período consultado.
