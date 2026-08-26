@@ -2,6 +2,14 @@
   publish = "public"
   functions = "netlify/functions"
 
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/mercadolibre/connect"
+  to = "/.netlify/functions/mercadolibre-connect"
+  status = 200
+
 [[redirects]]
   from = "/api/mercadolibre/callback"
   to = "/.netlify/functions/mercadolibre-callback"
@@ -10,4 +18,24 @@
 [[redirects]]
   from = "/api/mercadolibre/notificaciones"
   to = "/.netlify/functions/mercadolibre-notificaciones"
+  status = 200
+
+[[redirects]]
+  from = "/api/status"
+  to = "/.netlify/functions/status"
+  status = 200
+
+[[redirects]]
+  from = "/api/dashboard"
+  to = "/.netlify/functions/dashboard"
+  status = 200
+
+[[redirects]]
+  from = "/api/ai"
+  to = "/.netlify/functions/ai"
+  status = 200
+
+[[redirects]]
+  from = "/api/disconnect"
+  to = "/.netlify/functions/disconnect"
   status = 200

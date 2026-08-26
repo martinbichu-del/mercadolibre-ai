@@ -1,10 +1,11 @@
 {
-  "name": "mercadolibre-ai",
-  "version": "1.0.0",
+  "name": "rockos-intelligence",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Base inicial para conectar Mercado Libre con Netlify",
-  "engines": {
-    "node": ">=20"
+  "description": "Panel de inteligencia para Mercado Libre con Netlify y OpenAI",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@netlify/blobs": "^9.1.2"
   }
 }

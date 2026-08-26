@@ -1,28 +1,14 @@
+import { getStore } from '@netlify/blobs';
+
 export default async (request) => {
-  if (request.method !== "POST") {
-    return new Response(
-      "Endpoint de notificaciones de Mercado Libre activo.",
-      {
-        status: 200,
-        headers: { "content-type": "text/plain; charset=utf-8" }
-      }
-    );
-  }
-
+  if (request.method !== 'POST') return new Response('Endpoint activo', { status: 200 });
   let payload = null;
-
+  try { payload = await request.json(); } catch {}
   try {
-    payload = await request.json();
-  } catch {
-    // Mercado Libre espera una respuesta rápida. Aunque el cuerpo no sea JSON,
-    // confirmamos la recepción para evitar reintentos innecesarios.
+    const store = getStore({ name: 'rockos-events', consistency: 'eventual' });
+    await store.setJSON(`${Date.now()}-${crypto.randomUUID()}`, { receivedAt: new Date().toISOString(), payload });
+  } catch (error) {
+    console.error('No se pudo guardar la notificación:', error);
   }
-
-  // En la siguiente etapa guardaremos estos eventos en una base de datos.
-  console.log("Notificación recibida:", payload);
-
-  return new Response("OK", {
-    status: 200,
-    headers: { "content-type": "text/plain; charset=utf-8" }
-  });
+  return new Response('OK', { status: 200 });
 };
