@@ -39,3 +39,33 @@
   from = "/api/disconnect"
   to = "/.netlify/functions/disconnect"
   status = 200
+
+[[redirects]]
+  from = "/api/costs"
+  to = "/.netlify/functions/costs"
+  status = 200
+
+[[redirects]]
+  from = "/api/costs/import"
+  to = "/.netlify/functions/costs-import"
+  status = 200
+
+[[redirects]]
+  from = "/api/history"
+  to = "/.netlify/functions/history"
+  status = 200
+
+[[redirects]]
+  from = "/api/competition"
+  to = "/.netlify/functions/competition"
+  status = 200
+
+[[redirects]]
+  from = "/api/settings"
+  to = "/.netlify/functions/settings"
+  status = 200
+
+[[redirects]]
+  from = "/api/ads"
+  to = "/.netlify/functions/ads"
+  status = 200

@@ -2,6 +2,8 @@ import { getStore } from '@netlify/blobs';
 
 const TOKEN_KEY = 'mercadolibre-token';
 const CACHE_KEY = 'dashboard-cache';
+const COSTS_KEY = 'product-costs';
+const SETTINGS_KEY = 'business-settings';
 
 export const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -36,12 +38,18 @@ export async function deleteTokenRecord() {
   await store().delete(CACHE_KEY);
 }
 
-export async function getCache() {
-  return (await store().get(CACHE_KEY, { type: 'json' })) || null;
+export async function getCache(key = CACHE_KEY) {
+  return (await store().get(key, { type: 'json' })) || null;
 }
 
-export async function saveCache(value) {
-  await store().setJSON(CACHE_KEY, value);
+export async function saveCache(value, key = CACHE_KEY) {
+  await store().setJSON(key, value);
+}
+
+export async function clearCache(prefixes = [CACHE_KEY, 'history-', 'dashboard-']) {
+  await store().delete(CACHE_KEY);
+  // Netlify Blobs has no cheap wildcard delete in this setup. Versioned cache keys expire logically.
+  return prefixes;
 }
 
 async function exchangeRefreshToken(refreshToken) {
@@ -98,6 +106,61 @@ export async function meli(path, options = {}) {
   return payload;
 }
 
+export async function fetchOrders({ sellerId, from, to }) {
+  const rows = [];
+  const limit = 50;
+  let offset = 0;
+  let total = Infinity;
+  while (offset < total) {
+    const page = await meli(`/orders/search?seller=${sellerId}&order.date_created.from=${encodeURIComponent(from.toISOString())}&order.date_created.to=${encodeURIComponent(to.toISOString())}&sort=date_desc&limit=${limit}&offset=${offset}`);
+    const results = page.results || [];
+    rows.push(...results);
+    total = Number(page.paging?.total ?? rows.length);
+    offset += results.length;
+    if (!results.length) break;
+  }
+  return rows;
+}
+
+export function paidOrders(rows) {
+  return (rows || []).filter(o => ['paid', 'confirmed'].includes(o.status));
+}
+
 export function money(value, currency = 'ARS') {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(Number(value || 0));
+}
+
+export async function getCostsRecord() {
+  return (await store().get(COSTS_KEY, { type: 'json' })) || { importedAt: null, fileName: null, products: [] };
+}
+
+export async function saveCostsRecord(record) {
+  await store().setJSON(COSTS_KEY, record);
+  await clearCache();
+}
+
+export async function getSettings() {
+  return (await store().get(SETTINGS_KEY, { type: 'json' })) || {
+    leadTimeDays: 20,
+    safetyStockDays: 7,
+    targetMargin: 0.30,
+    currency: 'ARS'
+  };
+}
+
+export async function saveSettings(settings) {
+  await store().setJSON(SETTINGS_KEY, settings);
+  await clearCache();
+}
+
+export function startOfMonth(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
+}
+
+export function endOfMonth(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
+}
+
+export function dateKey(date) {
+  return date.toISOString().slice(0, 10);
 }

@@ -1,10 +1,12 @@
 {
   "name": "rockos-intelligence",
-  "version": "2.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
-  "description": "Panel de inteligencia para Mercado Libre con Netlify y OpenAI",
-  "engines": { "node": ">=20" },
+  "description": "Rockos Intelligence V5: dashboard mensual, histórico, competencia, costos y compras inteligentes",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@netlify/blobs": "^9.1.2"
   }
