@@ -42,3 +42,7 @@ El costo de envío del vendedor se obtiene exclusivamente desde `senders[].cost`
 ## V5.7 — Regla financiera
 
 La pantalla Productos y costos replica la estructura financiera del Excel importado. La API de Mercado Libre se usa para unidades, operaciones, stock y publicaciones; no para reconstruir cargos financieros que puedan duplicarse o clasificarse incorrectamente.
+
+
+## V5.8
+Ver `CHANGELOG-V5.8.md` para la búsqueda SEO hasta 150 resultados y la base de rentabilidad de 60 días.
