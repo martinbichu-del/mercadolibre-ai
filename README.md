@@ -46,3 +46,6 @@ La pantalla Productos y costos replica la estructura financiera del Excel import
 
 ## V5.8
 Ver `CHANGELOG-V5.8.md` para la búsqueda SEO hasta 150 resultados y la base de rentabilidad de 60 días.
+
+## V5.9
+Corrige la búsqueda SEO autenticada y recupera SKU históricos desde publicaciones/variaciones para la base de costos de los últimos dos meses.

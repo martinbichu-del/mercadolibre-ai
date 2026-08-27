@@ -3,24 +3,30 @@ import { json, meli } from './_shared.mjs';
 const stop = new Set(['de','del','la','las','el','los','para','con','y','en','por','un','una','mercado','libre','rockos','rocko']);
 const queryFromTitle = title => String(title || '').toLowerCase()
   .replace(/[^a-z0-9áéíóúñü\s-]/gi, ' ').split(/\s+/)
-  .filter(word => word.length > 2 && !stop.has(word)).slice(0, 9).join(' ');
+  .filter(word => word.length > 2 && !stop.has(word)).slice(0, 10).join(' ');
 
 function cleanQuery(value) {
-  const raw = String(value || '').trim();
+  let raw = String(value || '').trim();
   if (!raw) return '';
+  // URLs copied from Mercado Libre may include an encoded filter fragment after #D[...].
+  raw = raw.replace(/#.*$/s, '').trim();
   try {
     const u = new URL(raw);
-    const q = u.searchParams.get('q') || u.searchParams.get('as_word') || '';
+    const q = u.searchParams.get('q') || u.searchParams.get('as_word') || u.searchParams.get('search') || '';
     if (q) return decodeURIComponent(q.replace(/\+/g, ' ')).trim();
-    const path = decodeURIComponent(u.pathname)
+    let path = decodeURIComponent(u.pathname || '');
+    path = path
       .replace(/^\/(listado\/)?/i, '')
       .replace(/_Desde_\d+.*$/i, '')
-      .replace(/-NoIndex_True.*$/i, '')
+      .replace(/_NoIndex_True.*$/i, '')
       .replace(/\/+$/,'')
-      .replace(/[-_]+/g, ' ');
-    return path.trim();
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b(?:D|A)\s*\[[^\]]*\]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return path;
   } catch {
-    return raw;
+    return decodeURIComponent(raw.replace(/\+/g, ' ')).replace(/\s+/g, ' ').trim();
   }
 }
 
@@ -33,6 +39,18 @@ async function publicFetch(url) {
   const text = await response.text();
   if (!response.ok) { const e = new Error(`Respuesta pública ${response.status}`); e.status=response.status; throw e; }
   return { text, contentType: response.headers.get('content-type') || '' };
+}
+
+// Mercado Libre increasingly restricts anonymous search traffic from cloud hosts.
+// Use the authorized application connection first; fall back to public access only if needed.
+async function authenticatedSearch150(query) {
+  const all=[];
+  for (const offset of [0,50,100]) {
+    const page = await meli(`/sites/MLA/search?q=${encodeURIComponent(query)}&limit=50&offset=${offset}`);
+    all.push(...(page.results || []));
+    if ((page.results || []).length < 50) break;
+  }
+  return {results:all.slice(0,150),source:'api_autenticada_150'};
 }
 
 async function apiSearch150(query) {
@@ -52,7 +70,7 @@ async function storefrontSearch150(query) {
   for (const start of [1,51,101]) {
     const suffix=start===1?'':`_Desde_${start}_NoIndex_True`;
     const { text }=await publicFetch(`https://listado.mercadolibre.com.ar/${encodeURIComponent(slug)}${suffix}`);
-    for (const id of (text.match(/MLA\d{8,}/g)||[])) if(!ids.includes(id)) ids.push(id);
+    for (const id of (text.match(/MLA[-_]?\d{8,}/gi)||[]).map(x=>x.replace(/[-_]/g,'').toUpperCase())) if(!ids.includes(id)) ids.push(id);
     if(ids.length>=150) break;
   }
   if(!ids.length) throw Object.assign(new Error('Mercado Libre no devolvió resultados públicos.'),{status:502});
@@ -71,11 +89,8 @@ function parseManualIds(value) {
 }
 async function manualItems(value) {
   const ids=parseManualIds(value); if(!ids.length) return null;
-  const results=[];
-  for(let i=0;i<ids.length;i+=20){
-    const {text}=await publicFetch(`https://api.mercadolibre.com/items?ids=${ids.slice(i,i+20).join(',')}`);
-    results.push(...JSON.parse(text).map(x=>x.body).filter(Boolean));
-  }
+  const response = await meli(`/items?ids=${ids.join(',')}`);
+  const results = Array.isArray(response) ? response.map(x=>x.body).filter(Boolean) : [];
   return {results,source:'enlaces_manual'};
 }
 
@@ -93,14 +108,24 @@ export default async request => {
     if(!itemId) return json({error:'Falta itemId.'},400);
     const own=await meli(`/items/${encodeURIComponent(itemId)}`);
     const manual=await manualItems(input);
-    let query='', result;
+    let query='', result, attempts=[];
     if(manual){result=manual; query='Competidores específicos';}
     else{
       query=cleanQuery(input)||queryFromTitle(own.title);
-      try{result=await apiSearch150(query)}catch{result=await storefrontSearch150(query)}
+      if(!query) return json({error:'No pude extraer palabras de esa búsqueda.'},400);
+      try { result=await authenticatedSearch150(query); }
+      catch(e1) {
+        attempts.push(`autenticada: ${e1.message}`);
+        try { result=await apiSearch150(query); }
+        catch(e2) {
+          attempts.push(`pública: ${e2.message}`);
+          try { result=await storefrontSearch150(query); }
+          catch(e3) { attempts.push(`listado: ${e3.message}`); throw Object.assign(new Error(attempts.join(' | ')),{status:e3.status||502}); }
+        }
+      }
     }
     const candidates=result.results||[];
-    const ownIndex=candidates.findIndex(x=>x.id===own.id);
+    const ownIndex=candidates.findIndex(x=>String(x.id)===String(own.id));
     const ranked=candidates.map((item,index)=>({...compact(item),rank:index+1}));
     const competitors=ranked.filter(item=>item.id!==own.id && item.seller_id!==own.seller_id)
       .slice(0,25).map(item=>({...item,priceDifference:own.price?(Number(item.price)-Number(own.price))/Number(own.price):null}));
@@ -114,6 +139,10 @@ export default async request => {
       ]
     });
   }catch(error){
-    return json({error:'No pude analizar esa búsqueda. Pegá una URL general de listado, palabras clave o enlaces directos MLA.',technical:error.message},Number(error.status||500));
+    return json({
+      error:'No pude consultar esa búsqueda desde Mercado Libre.',
+      technical:error.message,
+      hint:'Probá escribir solamente las palabras clave. Si sigue fallando, pegá enlaces MLA específicos mientras revisamos el permiso de búsquedas de la aplicación.'
+    },Number(error.status||500));
   }
 };
