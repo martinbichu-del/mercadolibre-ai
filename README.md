@@ -34,3 +34,7 @@ La vinculación se realiza exclusivamente con la columna SKU del Excel. El stock
 
 ## V5.5
 Incluye las dos rentabilidades, semáforo, consejos y simulador de impacto de precio.
+
+## V5.6 — conciliación de envíos
+
+El costo de envío del vendedor se obtiene exclusivamente desde `senders[].cost` en `/shipments/{id}/costs`, evitando usar costos logísticos brutos que distorsionaban la rentabilidad.

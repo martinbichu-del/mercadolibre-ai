@@ -33,16 +33,12 @@ function feeBreakdown(order) {
 }
 
 function extractSellerShippingCost(payload) {
-  const values = [];
-  const push = v => { const x = n(v); if (x > 0) values.push(x); };
-  push(payload?.sender?.cost);
-  push(payload?.seller?.cost);
-  push(payload?.senders?.[0]?.cost);
-  push(payload?.senders?.[0]?.cost_components?.special_discount);
-  push(payload?.gross_amount);
-  push(payload?.cost);
-  // Prefer explicit sender/seller values; gross_amount is only a fallback.
-  return values.length ? values[0] : 0;
+  // Para conciliación, Mercado Libre documenta que el importe efectivamente
+  // cobrado al vendedor está en senders[].cost. No usamos sender.cost,
+  // gross_amount ni cost porque pueden representar el costo logístico bruto,
+  // el precio de lista del envío o importes previos a subsidios/descuentos.
+  const senders = Array.isArray(payload?.senders) ? payload.senders : [];
+  return senders.reduce((sum, sender) => sum + Math.max(0, n(sender?.cost)), 0);
 }
 
 async function shipmentCost(order) {
@@ -132,7 +128,7 @@ export default async (request) => {
       coverage: {
         orders: orders.length,
         ordersWithShippingCost,
-        note: 'Los importes se calculan con los cargos informados por las APIs de órdenes, pagos y envíos. Si Mercado Libre no expone un cargo para una operación, se muestra como no informado y no se inventa.'
+        note: 'Los costos de envío usan exclusivamente senders[].cost, que representa lo cobrado al vendedor después de subsidios. No se usan gross_amount ni costos logísticos brutos. Los demás cargos provienen de órdenes y pagos; si Mercado Libre no expone un cargo, no se inventa.'
       }
     });
   } catch (error) {
