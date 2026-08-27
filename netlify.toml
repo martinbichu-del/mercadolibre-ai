@@ -69,3 +69,8 @@
   from = "/api/ads"
   to = "/.netlify/functions/ads"
   status = 200
+
+[[redirects]]
+  from = "/api/profitability"
+  to = "/.netlify/functions/profitability"
+  status = 200
