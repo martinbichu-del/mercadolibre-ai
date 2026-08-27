@@ -126,13 +126,34 @@ export default async (request) => {
 
     const costsRecord = await getCostsRecord();
     const settings = await getSettings();
-    const costsBySku = new Map((costsRecord.products || []).map(p => [String(p.sku || '').trim().toUpperCase(), p]));
-    const itemSku = item => String(item.seller_custom_field || item.variations?.[0]?.seller_custom_field || '').trim();
+    const normalizeSku = value => String(value ?? '').trim().toUpperCase();
+    const costsBySku = new Map((costsRecord.products || []).map(p => [normalizeSku(p.sku), p]));
+
+    // Mercado Libre puede devolver el SKU en distintos campos según el tipo y la antigüedad
+    // de la publicación. Se revisan todos y se vincula exclusivamente por la columna SKU del Excel.
+    const attributeSku = attributes => (attributes || [])
+      .find(attribute => ['SELLER_SKU', 'SELLER_CUSTOM_FIELD'].includes(String(attribute?.id || '').toUpperCase()))
+      ?.value_name;
+    const extractSkus = item => {
+      const candidates = [
+        item.seller_custom_field,
+        item.seller_sku,
+        attributeSku(item.attributes),
+        ...(item.variations || []).flatMap(variation => [
+          variation.seller_custom_field,
+          variation.seller_sku,
+          attributeSku(variation.attributes)
+        ])
+      ];
+      return [...new Set(candidates.map(value => String(value ?? '').trim()).filter(Boolean))];
+    };
     const salesByItem = new Map(productSales(selectedOrders).map(row => [row.id, row]));
 
     const listings = items.map(item => {
-      const sku = itemSku(item);
-      const cost = costsBySku.get(sku.toUpperCase()) || null;
+      const skus = extractSkus(item);
+      const matchedSku = skus.find(value => costsBySku.has(normalizeSku(value))) || skus[0] || '';
+      const cost = matchedSku ? costsBySku.get(normalizeSku(matchedSku)) || null : null;
+      const sku = matchedSku;
       const salePrice = num(item.price);
       const unitCost = num(cost?.costPack ?? cost?.cost);
       const sales = salesByItem.get(item.id) || { units: 0, revenue: 0 };
@@ -144,6 +165,8 @@ export default async (request) => {
       return {
         id: item.id,
         sku,
+        skus,
+        skuMatch: cost ? 'matched' : (skus.length ? 'not_found_in_excel' : 'missing_in_meli'),
         title: item.title,
         price: item.price,
         currency_id: item.currency_id,

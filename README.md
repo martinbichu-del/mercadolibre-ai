@@ -1,4 +1,4 @@
-# Rocko's Intelligence V5
+# Rocko's Intelligence V5.1
 
 Versión funcional para Netlify con:
 
@@ -26,3 +26,7 @@ El módulo de Publicidad no muestra métricas inventadas. Para traer ROAS, ACOS,
 - `OPENAI_API_KEY`
 
 No hace falta agregar variables nuevas para esta versión.
+
+
+## Vinculación de costos
+La vinculación se realiza exclusivamente con la columna SKU del Excel. El stock se toma siempre de Mercado Libre.
