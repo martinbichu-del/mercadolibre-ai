@@ -30,3 +30,7 @@ No hace falta agregar variables nuevas para esta versión.
 
 ## Vinculación de costos
 La vinculación se realiza exclusivamente con la columna SKU del Excel. El stock se toma siempre de Mercado Libre.
+
+
+## V5.5
+Incluye las dos rentabilidades, semáforo, consejos y simulador de impacto de precio.
