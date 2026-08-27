@@ -38,3 +38,7 @@ Incluye las dos rentabilidades, semáforo, consejos y simulador de impacto de pr
 ## V5.6 — conciliación de envíos
 
 El costo de envío del vendedor se obtiene exclusivamente desde `senders[].cost` en `/shipments/{id}/costs`, evitando usar costos logísticos brutos que distorsionaban la rentabilidad.
+
+## V5.7 — Regla financiera
+
+La pantalla Productos y costos replica la estructura financiera del Excel importado. La API de Mercado Libre se usa para unidades, operaciones, stock y publicaciones; no para reconstruir cargos financieros que puedan duplicarse o clasificarse incorrectamente.
