@@ -1,9 +1,9 @@
 {
   "name": "rockos-intelligence",
-  "version": "5.0.0",
+  "version": "5.2.0",
   "private": true,
   "type": "module",
-  "description": "Rockos Intelligence V5: dashboard mensual, histórico, competencia, costos y compras inteligentes",
+  "description": "Rockos Intelligence V5.2: lectura robusta de SKU en publicaciones y variaciones de Mercado Libre",
   "engines": {
     "node": ">=20"
   },

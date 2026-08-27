@@ -6,7 +6,7 @@ const num = value => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 const text = value => String(value ?? '').trim();
-const key = value => text(value).toUpperCase();
+const key = value => text(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 
 export default async (request) => {
   if (request.method !== 'POST') return json({ error: 'Método no permitido.' }, 405);

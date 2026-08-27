@@ -126,34 +126,102 @@ export default async (request) => {
 
     const costsRecord = await getCostsRecord();
     const settings = await getSettings();
-    const normalizeSku = value => String(value ?? '').trim().toUpperCase();
-    const costsBySku = new Map((costsRecord.products || []).map(p => [normalizeSku(p.sku), p]));
 
-    // Mercado Libre puede devolver el SKU en distintos campos según el tipo y la antigüedad
-    // de la publicación. Se revisan todos y se vincula exclusivamente por la columna SKU del Excel.
-    const attributeSku = attributes => (attributes || [])
-      .find(attribute => ['SELLER_SKU', 'SELLER_CUSTOM_FIELD'].includes(String(attribute?.id || '').toUpperCase()))
-      ?.value_name;
-    const extractSkus = item => {
-      const candidates = [
-        item.seller_custom_field,
-        item.seller_sku,
-        attributeSku(item.attributes),
-        ...(item.variations || []).flatMap(variation => [
-          variation.seller_custom_field,
-          variation.seller_sku,
-          attributeSku(variation.attributes)
+    // La unión Excel ↔ Mercado Libre se hace exclusivamente por SKU. Para evitar falsos
+    // negativos se eliminan espacios, guiones, acentos y caracteres invisibles sólo al comparar;
+    // el valor original siempre se conserva y se muestra en pantalla.
+    const normalizeSku = value => String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toUpperCase();
+    const costsBySku = new Map((costsRecord.products || []).map(product => [normalizeSku(product.sku), product]));
+
+    const skuAttributeIds = new Set(['SELLER_SKU', 'SELLER_CUSTOM_FIELD', 'SELLER_CUSTOM_FIELD_ID', 'SKU']);
+    const attributeSkuEntries = (attributes, prefix) => (attributes || [])
+      .filter(attribute => skuAttributeIds.has(String(attribute?.id || '').toUpperCase()))
+      .flatMap(attribute => [attribute?.value_name, attribute?.value_id]
+        .filter(Boolean)
+        .map(value => ({ value: String(value).trim(), source: `${prefix}.attributes.${attribute.id}` })));
+
+    const extractSkuEntries = item => {
+      const entries = [
+        { value: item?.seller_custom_field, source: 'item.seller_custom_field' },
+        { value: item?.seller_sku, source: 'item.seller_sku' },
+        { value: item?.sku, source: 'item.sku' },
+        ...attributeSkuEntries(item?.attributes, 'item'),
+        ...(item?.variations || []).flatMap((variation, index) => [
+          { value: variation?.seller_custom_field, source: `variation[${index}].seller_custom_field` },
+          { value: variation?.seller_sku, source: `variation[${index}].seller_sku` },
+          { value: variation?.sku, source: `variation[${index}].sku` },
+          ...attributeSkuEntries(variation?.attributes, `variation[${index}]`)
         ])
-      ];
-      return [...new Set(candidates.map(value => String(value ?? '').trim()).filter(Boolean))];
+      ].filter(entry => String(entry.value ?? '').trim());
+
+      const seen = new Set();
+      return entries.filter(entry => {
+        const key = `${normalizeSku(entry.value)}|${entry.source}`;
+        if (!normalizeSku(entry.value) || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     };
+
+    // Algunas publicaciones antiguas o con variaciones no entregan todos los campos en /items?ids=.
+    // Se consulta el detalle individual sólo para las que no pueden vincularse con el Excel.
+    const needsDetail = item => !extractSkuEntries(item).some(entry => costsBySku.has(normalizeSku(entry.value)));
+    const detailedById = new Map();
+    const idsNeedingDetail = items.filter(needsDetail).map(item => item.id);
+    for (const group of chunk(idsNeedingDetail, 8)) {
+      const details = await Promise.all(group.map(async id => {
+        try {
+          return await meli(`/items/${id}?include_attributes=all`);
+        } catch {
+          return null;
+        }
+      }));
+      details.filter(Boolean).forEach(detail => detailedById.set(detail.id, detail));
+    }
+
+    // Último respaldo: algunos pedidos incluyen el seller_sku aunque el endpoint de publicaciones
+    // no lo exponga. Se usa sólo para diagnosticar y vincular el mismo item_id.
+    const orderSkuEntriesByItem = new Map();
+    for (const order of paidOrders(selectedOrders)) {
+      for (const row of order.order_items || []) {
+        const itemId = row?.item?.id;
+        if (!itemId) continue;
+        const candidates = [
+          { value: row?.item?.seller_sku, source: 'order.item.seller_sku' },
+          { value: row?.item?.seller_custom_field, source: 'order.item.seller_custom_field' },
+          { value: row?.seller_sku, source: 'order.seller_sku' },
+          { value: row?.seller_custom_field, source: 'order.seller_custom_field' }
+        ].filter(entry => String(entry.value ?? '').trim());
+        if (!candidates.length) continue;
+        const current = orderSkuEntriesByItem.get(itemId) || [];
+        orderSkuEntriesByItem.set(itemId, [...current, ...candidates]);
+      }
+    }
+
     const salesByItem = new Map(productSales(selectedOrders).map(row => [row.id, row]));
 
-    const listings = items.map(item => {
-      const skus = extractSkus(item);
-      const matchedSku = skus.find(value => costsBySku.has(normalizeSku(value))) || skus[0] || '';
-      const cost = matchedSku ? costsBySku.get(normalizeSku(matchedSku)) || null : null;
-      const sku = matchedSku;
+    const listings = items.map(summaryItem => {
+      const item = detailedById.get(summaryItem.id) || summaryItem;
+      const skuEntries = [...extractSkuEntries(item), ...(orderSkuEntriesByItem.get(item.id) || [])];
+      const uniqueEntries = [];
+      const seenSku = new Set();
+      for (const entry of skuEntries) {
+        const normalized = normalizeSku(entry.value);
+        if (!normalized || seenSku.has(`${normalized}|${entry.source}`)) continue;
+        seenSku.add(`${normalized}|${entry.source}`);
+        uniqueEntries.push({ ...entry, normalized });
+      }
+      const matchedEntry = uniqueEntries.find(entry => costsBySku.has(entry.normalized)) || null;
+      const firstEntry = uniqueEntries[0] || null;
+      const selectedEntry = matchedEntry || firstEntry;
+      const sku = selectedEntry?.value || '';
+      const skus = [...new Set(uniqueEntries.map(entry => entry.value))];
+      const cost = matchedEntry ? costsBySku.get(matchedEntry.normalized) || null : null;
+      const skuSource = selectedEntry?.source || null;
       const salePrice = num(item.price);
       const unitCost = num(cost?.costPack ?? cost?.cost);
       const sales = salesByItem.get(item.id) || { units: 0, revenue: 0 };
@@ -166,7 +234,10 @@ export default async (request) => {
         id: item.id,
         sku,
         skus,
+        skuSource,
+        skuDiagnostics: uniqueEntries.map(entry => ({ value: entry.value, source: entry.source, normalized: entry.normalized })),
         skuMatch: cost ? 'matched' : (skus.length ? 'not_found_in_excel' : 'missing_in_meli'),
+        skuMatchMethod: cost ? (String(skuSource || '').startsWith('variation') ? 'variation' : String(skuSource || '').startsWith('order') ? 'order' : 'publication') : null,
         title: item.title,
         price: item.price,
         currency_id: item.currency_id,
