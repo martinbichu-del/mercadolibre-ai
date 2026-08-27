@@ -49,3 +49,7 @@ Ver `CHANGELOG-V5.8.md` para la búsqueda SEO hasta 150 resultados y la base de 
 
 ## V5.9
 Corrige la búsqueda SEO autenticada y recupera SKU históricos desde publicaciones/variaciones para la base de costos de los últimos dos meses.
+
+## SEO Capture V6
+
+La carpeta `extension` contiene una extensión local para Chrome/Edge. Consultá `INSTALAR-EXTENSION.md`.

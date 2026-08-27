@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Rocko's SEO Capture",
+  "version": "1.0.0",
+  "description": "Captura hasta 150 resultados de una búsqueda de Mercado Libre desde tu navegador.",
+  "permissions": ["activeTab", "downloads", "storage", "scripting"],
+  "host_permissions": ["https://listado.mercadolibre.com.ar/*", "https://www.mercadolibre.com.ar/*"],
+  "action": {
+    "default_title": "Rocko's SEO Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://listado.mercadolibre.com.ar/*", "https://www.mercadolibre.com.ar/*"],
+      "js": ["capture.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
