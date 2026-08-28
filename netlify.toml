@@ -74,3 +74,8 @@
   from = "/api/profitability"
   to = "/.netlify/functions/profitability"
   status = 200
+
+[[redirects]]
+  from = "/api/monthly-results"
+  to = "/.netlify/functions/monthly-results"
+  status = 200

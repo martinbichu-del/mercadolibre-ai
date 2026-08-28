@@ -4,6 +4,7 @@ const TOKEN_KEY = 'mercadolibre-token';
 const CACHE_KEY = 'dashboard-cache';
 const COSTS_KEY = 'product-costs';
 const SETTINGS_KEY = 'business-settings';
+const PNL_EXPENSES_KEY = 'pnl-monthly-expenses';
 
 export const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -136,6 +137,16 @@ export async function getCostsRecord() {
 
 export async function saveCostsRecord(record) {
   await store().setJSON(COSTS_KEY, record);
+  await clearCache();
+}
+
+
+export async function getPnlExpenses() {
+  return (await store().get(PNL_EXPENSES_KEY, { type: 'json' })) || { years: {} };
+}
+
+export async function savePnlExpenses(record) {
+  await store().setJSON(PNL_EXPENSES_KEY, record);
   await clearCache();
 }
 

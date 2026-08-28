@@ -53,3 +53,13 @@ Corrige la búsqueda SEO autenticada y recupera SKU históricos desde publicacio
 ## SEO Capture V6
 
 La carpeta `extension` contiene una extensión local para Chrome/Edge. Consultá `INSTALAR-EXTENSION.md`.
+
+
+## V7 — Resultados mensuales
+Nueva sección de estado de resultados anual con meses en columnas, rubros en filas, gastos editables, vista en pesos/porcentajes y resultado neto mensual.
+
+## V8 — Estado de resultados automático
+
+La sección **Resultados mensuales** toma de Mercado Libre las ventas y las liquidaciones disponibles para conciliar comisiones, cuotas, cargos fijos, envíos y otros descuentos. El Excel aporta costo de mercadería y packaging. Los gastos externos se editan manualmente por mes.
+
+Si Mercado Libre no devuelve el detalle completo de algún pago, la aplicación lo marca como **pago con datos parciales** en lugar de inventar un importe.
