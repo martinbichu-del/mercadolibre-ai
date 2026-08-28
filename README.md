@@ -63,3 +63,6 @@ Nueva sección de estado de resultados anual con meses en columnas, rubros en fi
 La sección **Resultados mensuales** toma de Mercado Libre las ventas y las liquidaciones disponibles para conciliar comisiones, cuotas, cargos fijos, envíos y otros descuentos. El Excel aporta costo de mercadería y packaging. Los gastos externos se editan manualmente por mes.
 
 Si Mercado Libre no devuelve el detalle completo de algún pago, la aplicación lo marca como **pago con datos parciales** en lugar de inventar un importe.
+
+## V9
+El estado de resultados separa ventas totales, anulaciones y ventas netas. Los costos de Mercado Libre se concilian usando pagos, `sale_fee` y costos reales de envío; los gastos externos continúan siendo editables.

@@ -54,8 +54,10 @@ async function itemDetailsFor(orders) {
 function monthTemplate(index) {
   return {
     index,
-    grossSales: 0,
+    listSales: 0,
     discounts: 0,
+    totalSales: 0,
+    cancellations: 0,
     netSales: 0,
     commission: 0,
     installments: 0,
@@ -184,6 +186,49 @@ async function fetchPaymentDetails(orders) {
   return map;
 }
 
+
+async function fetchShipmentSellerCosts(orders) {
+  const ids = [...new Set((orders || []).map(o => o?.shipping?.id).filter(Boolean).map(String))];
+  const map = new Map();
+  const concurrency = 5;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      try {
+        const costs = await meli(`/shipments/${encodeURIComponent(id)}/costs`);
+        const senderCost = (costs?.senders || []).reduce((sum, row) => sum + Math.abs(num(row?.cost)), 0);
+        map.set(id, senderCost);
+      } catch {
+        map.set(id, 0);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length || 1) }, () => worker()));
+  return map;
+}
+
+function orderItemsAmount(order, field = 'unit_price') {
+  return (order?.order_items || []).reduce((sum, row) => {
+    const quantity = Math.max(1, num(row?.quantity));
+    return sum + num(row?.[field]) * quantity;
+  }, 0);
+}
+
+function orderRefundAmount(order) {
+  if (['cancelled', 'canceled', 'invalid'].includes(String(order?.status || '').toLowerCase())) {
+    return orderItemsAmount(order, 'unit_price');
+  }
+  return (order?.payments || []).reduce((sum, payment) => {
+    const status = String(payment?.status || '').toLowerCase();
+    const refunded = Math.abs(num(payment?.transaction_amount_refunded ?? payment?.refunded_amount));
+    if (refunded) return sum + refunded;
+    if (['refunded', 'charged_back', 'cancelled', 'canceled'].includes(status)) {
+      return sum + Math.abs(num(payment?.transaction_amount || payment?.total_paid_amount));
+    }
+    return sum;
+  }, 0);
+}
 export default async request => {
   try {
     const url = new URL(request.url);
@@ -205,7 +250,7 @@ export default async request => {
     const year = Number(url.searchParams.get('year') || new Date().getUTCFullYear());
     if (!Number.isInteger(year) || year < 2020 || year > 2100) return json({ error: 'Año inválido.' }, 400);
     const force = url.searchParams.get('refresh') === '1';
-    const cacheKey = `pnl-v8-auto-ml-${year}`;
+    const cacheKey = `pnl-v9-reconciled-${year}`;
     const cached = await getCache(cacheKey);
     if (!force && cached?.createdAt && Date.now() - cached.createdAt < 30 * 60 * 1000) return json(cached.data);
 
@@ -214,11 +259,13 @@ export default async request => {
     const yearEnd = endOfMonth(year, 11);
     const to = year === now.getUTCFullYear() ? now : yearEnd;
     const user = await meli('/users/me');
-    const orders = paidOrders(await fetchOrders({ sellerId: user.id, from, to }));
-    const [costsRecord, details, paymentDetails, expensesRecord] = await Promise.all([
+    const allOrders = await fetchOrders({ sellerId: user.id, from, to });
+    const orders = paidOrders(allOrders);
+    const [costsRecord, details, paymentDetails, shipmentCosts, expensesRecord] = await Promise.all([
       getCostsRecord(),
       itemDetailsFor(orders),
       fetchPaymentDetails(orders),
+      fetchShipmentSellerCosts(orders),
       getPnlExpenses()
     ]);
 
@@ -226,6 +273,17 @@ export default async request => {
     const expenses = { ...defaultExpenseYear(), ...(expensesRecord.years?.[String(year)] || {}) };
     const months = Array.from({ length: 12 }, (_, i) => monthTemplate(i));
     const orderIdsByMonth = Array.from({ length: 12 }, () => new Set());
+
+    // Ventas totales incluye las operaciones luego anuladas. Las anulaciones y
+    // devoluciones se muestran en una fila separada y se restan para llegar a ventas netas.
+    for (const order of allOrders) {
+      const monthIndex = new Date(order.date_created).getUTCMonth();
+      if (monthIndex < 0 || monthIndex > 11) continue;
+      const amount = orderItemsAmount(order, 'unit_price');
+      const cancelled = Math.min(amount, orderRefundAmount(order));
+      months[monthIndex].totalSales += amount;
+      months[monthIndex].cancellations += cancelled;
+    }
 
     for (const order of orders) {
       const monthIndex = new Date(order.date_created).getUTCMonth();
@@ -258,37 +316,46 @@ export default async request => {
         target.packaging += packaging * quantity;
       }
 
-      target.grossSales += orderItemsGross;
-      target.netSales += orderItemsNet;
+      target.listSales += orderItemsGross;
       target.discounts += Math.max(0, orderItemsGross - orderItemsNet);
 
       const payments = order.payments || [];
-      let orderSettlement = { commission: 0, installments: 0, fixedCharge: 0, shipping: 0, otherMl: 0, totalMl: 0, netReceived: 0 };
+      const saleFee = (order.order_items || []).reduce((sum, row) => sum + Math.abs(num(row?.sale_fee)), 0);
+      const sellerShipping = Math.abs(num(shipmentCosts.get(String(order?.shipping?.id || ''))));
+      let orderSettlement = { commission: 0, installments: 0, fixedCharge: 0, shipping: sellerShipping, otherMl: 0, paymentMl: 0, totalMl: 0 };
       for (const paymentSummary of payments) {
         const detail = paymentDetails.get(String(paymentSummary?.id));
         const classified = detail ? classifyPayment(detail) : classifyOrderPaymentFallback(paymentSummary);
         if (detail) target.settlementPayments += 1;
         else target.settlementFallbacks += 1;
-        for (const key of ['commission', 'installments', 'fixedCharge', 'shipping', 'otherMl', 'totalMl', 'netReceived']) {
-          orderSettlement[key] += num(classified[key]);
-        }
+        orderSettlement.commission += num(classified.commission);
+        orderSettlement.installments += num(classified.installments);
+        orderSettlement.fixedCharge += num(classified.fixedCharge);
+        orderSettlement.otherMl += num(classified.otherMl);
+        orderSettlement.paymentMl += Math.max(0, num(classified.totalMl) - num(classified.shipping));
       }
 
-      // Payment settlements are the source of truth for Mercado Libre deductions.
-      // If no payment detail exists, the order total remains visible and the missing
-      // deduction is not fabricated.
+      // En muchas órdenes Mercado Libre informa la comisión únicamente en sale_fee.
+      // Se usa como respaldo, nunca se suma dos veces.
+      if (!orderSettlement.commission && saleFee) orderSettlement.commission = saleFee;
+      const knownPayment = orderSettlement.commission + orderSettlement.installments + orderSettlement.fixedCharge;
+      if (orderSettlement.paymentMl < knownPayment) orderSettlement.paymentMl = knownPayment + orderSettlement.otherMl;
+      else orderSettlement.otherMl = Math.max(0, orderSettlement.paymentMl - knownPayment);
+      orderSettlement.totalMl = orderSettlement.paymentMl + orderSettlement.shipping;
+
       target.commission += orderSettlement.commission;
       target.installments += orderSettlement.installments;
       target.fixedCharge += orderSettlement.fixedCharge;
       target.shipping += orderSettlement.shipping;
       target.otherMl += orderSettlement.otherMl;
       target.totalMl += orderSettlement.totalMl;
-      target.netAfterMl += orderSettlement.netReceived || Math.max(0, orderItemsNet - orderSettlement.totalMl);
+      target.netAfterMl += Math.max(0, orderItemsNet - orderSettlement.totalMl);
     }
 
     for (let i = 0; i < 12; i++) {
       const m = months[i];
       m.orders = orderIdsByMonth[i].size;
+      m.netSales = Math.max(0, m.totalSales - m.cancellations);
       m.totalProducts = m.merchandise + m.packaging;
       if (!m.netAfterMl && m.netSales) m.netAfterMl = Math.max(0, m.netSales - m.totalMl);
       m.contribution = m.netAfterMl - m.totalProducts;
@@ -317,7 +384,7 @@ export default async request => {
     const data = {
       year,
       generatedAt: new Date().toISOString(),
-      source: 'Ventas, liquidaciones y costos de Mercado Libre + mercadería del Excel + gastos externos manuales',
+      source: 'Órdenes, pagos, sale_fee y costos de envío de Mercado Libre + mercadería del Excel + gastos externos manuales',
       months,
       totals,
       averages,
@@ -325,6 +392,8 @@ export default async request => {
       expenses,
       currentSummary: {
         monthIndex: lastIndex,
+        totalSales: currentMonth.totalSales,
+        cancellations: currentMonth.cancellations,
         netSales: currentMonth.netSales,
         netAfterMl: currentMonth.netAfterMl,
         contribution: currentMonth.contribution,
@@ -334,13 +403,14 @@ export default async request => {
       },
       coverage: {
         orders: orders.length,
+        allOrders: allOrders.length,
         settlementPayments: totals.settlementPayments || 0,
         settlementFallbacks: totals.settlementFallbacks || 0,
         matchedUnits: totals.matchedUnits || 0,
         unmatchedUnits: totals.unmatchedUnits || 0,
         costFile: costsRecord.fileName || null,
         costImportedAt: costsRecord.importedAt || null,
-        note: 'Comisiones, cuotas, cargos, envíos y demás descuentos se concilian desde las liquidaciones de Mercado Libre. Mercadería y packaging vienen del Excel. Publicidad, sueldos, contador, retenciones, impuestos y otros gastos externos son editables por mes.'
+        note: 'Ventas totales y anulaciones se obtienen de órdenes. Comisiones usan pagos y sale_fee como respaldo; cuotas y cargos se separan cuando Mercado Libre los identifica; envíos usan el costo real del remitente. Mercadería y packaging vienen del Excel. Los gastos externos son editables por mes.'
       }
     };
 
