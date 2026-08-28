@@ -66,3 +66,7 @@ Si Mercado Libre no devuelve el detalle completo de algún pago, la aplicación 
 
 ## V9
 El estado de resultados separa ventas totales, anulaciones y ventas netas. Los costos de Mercado Libre se concilian usando pagos, `sale_fee` y costos reales de envío; los gastos externos continúan siendo editables.
+
+## V10 — conciliación y gastos manuales
+
+Después del despliegue, entrá en **Resultados mensuales** y presioná **Recalcular**. La primera ejecución puede tardar porque vuelve a consultar órdenes, pagos y envíos. El botón **Editar gastos mensuales** abre una ventana para cargar gastos externos por mes.

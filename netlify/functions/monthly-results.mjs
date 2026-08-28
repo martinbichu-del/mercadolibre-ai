@@ -113,36 +113,44 @@ function expenseTotal(expenses, monthIndex) {
 }
 
 function feeType(detail) {
-  return String(detail?.type || detail?.fee_type || detail?.name || detail?.description || '').toLowerCase();
+  return [detail?.type, detail?.fee_type, detail?.name, detail?.description, detail?.reason, detail?.detail]
+    .filter(Boolean).join(' ').toLowerCase();
+}
+
+function allFeeRows(payment) {
+  return [
+    ...(Array.isArray(payment?.fee_details) ? payment.fee_details : []),
+    ...(Array.isArray(payment?.charges_details) ? payment.charges_details : []),
+    ...(Array.isArray(payment?.fees) ? payment.fees : [])
+  ];
 }
 
 function classifyPayment(payment) {
-  const transactionAmount = num(payment?.transaction_amount || payment?.total_paid_amount);
-  const netReceived = num(payment?.transaction_details?.net_received_amount ?? payment?.net_received_amount);
-  const marketplaceFee = Math.abs(num(payment?.marketplace_fee));
+  const transactionAmount = num(payment?.transaction_amount || payment?.total_paid_amount || payment?.amount);
+  const netReceived = num(payment?.transaction_details?.net_received_amount ?? payment?.net_received_amount ?? payment?.net_amount);
+  const marketplaceFee = Math.abs(num(payment?.marketplace_fee ?? payment?.marketplace_fee_amount));
   let commission = marketplaceFee;
-  let installments = 0;
-  let fixedCharge = 0;
-  let shipping = Math.abs(num(payment?.shipping_cost));
-  let explicitOther = 0;
+  let installments = Math.abs(num(payment?.financing_fee ?? payment?.installments_fee ?? payment?.financial_cost));
+  let fixedCharge = Math.abs(num(payment?.fixed_fee ?? payment?.fixed_charge));
+  let shipping = Math.abs(num(payment?.shipping_cost ?? payment?.shipping_amount));
+  let explicitOther = Math.abs(num(payment?.taxes_amount ?? payment?.tax_amount));
 
-  for (const fee of payment?.fee_details || []) {
-    const amount = Math.abs(num(fee?.amount));
+  for (const fee of allFeeRows(payment)) {
+    const amount = Math.abs(num(fee?.amount ?? fee?.value ?? fee?.fee_amount));
     const type = feeType(fee);
     if (!amount) continue;
-    if (/financ|install|cuota/.test(type)) installments += amount;
-    else if (/fixed|cargo fijo/.test(type)) fixedCharge += amount;
-    else if (/shipping|shipment|envio|envío|freight/.test(type)) shipping += amount;
-    else if (/marketplace|sale|commission|comision|comisión/.test(type)) {
+    if (/financ|install|cuota|financial|interest|interes|interés/.test(type)) installments += amount;
+    else if (/fixed|cargo fijo|flat fee/.test(type)) fixedCharge += amount;
+    else if (/shipping|shipment|envio|envío|freight|logistic/.test(type)) shipping += amount;
+    else if (/marketplace|sale fee|commission|comision|comisión|selling fee/.test(type)) {
       if (!marketplaceFee) commission += amount;
     } else explicitOther += amount;
   }
 
-  // The settlement total is the source of truth. Component fields are used only
-  // to explain that total, and never added twice.
+  const componentTotal = commission + installments + fixedCharge + shipping + explicitOther;
   const settlementCost = netReceived > 0 && transactionAmount > 0
     ? Math.max(0, transactionAmount - netReceived)
-    : Math.max(0, commission + installments + fixedCharge + shipping + explicitOther);
+    : Math.max(0, componentTotal);
   const known = commission + installments + fixedCharge + shipping;
   const otherMl = Math.max(0, settlementCost - known);
 
@@ -155,9 +163,10 @@ function classifyPayment(payment) {
     shipping,
     otherMl,
     totalMl: settlementCost,
-    detailed: Boolean(payment?.transaction_details || payment?.fee_details)
+    detailed: Boolean(netReceived || allFeeRows(payment).length || marketplaceFee || installments || fixedCharge)
   };
 }
+
 
 function classifyOrderPaymentFallback(payment) {
   return classifyPayment(payment || {});
@@ -166,19 +175,32 @@ function classifyOrderPaymentFallback(payment) {
 async function fetchPaymentDetails(orders) {
   const ids = [...new Set(orders.flatMap(order => (order.payments || []).map(p => p?.id).filter(Boolean)).map(String))];
   const map = new Map();
-  const concurrency = 5;
+  const concurrency = 4;
   let cursor = 0;
+
+  async function getPayment(id) {
+    const paths = [
+      `/v1/payments/${encodeURIComponent(id)}`,
+      `/payments/${encodeURIComponent(id)}`,
+      `/collections/${encodeURIComponent(id)}`
+    ];
+    for (const path of paths) {
+      try {
+        const payment = await meli(path);
+        if (payment && (payment.id || payment.collection?.id || payment.transaction_amount != null)) {
+          return payment.collection || payment;
+        }
+      } catch {}
+    }
+    return null;
+  }
 
   async function worker() {
     while (cursor < ids.length) {
       const index = cursor++;
       const id = ids[index];
-      try {
-        const payment = await meli(`/v1/payments/${encodeURIComponent(id)}`);
-        map.set(id, payment);
-      } catch {
-        // A missing payment detail must not prevent the annual statement.
-      }
+      const payment = await getPayment(id);
+      if (payment) map.set(id, payment);
     }
   }
 
@@ -215,20 +237,31 @@ function orderItemsAmount(order, field = 'unit_price') {
   }, 0);
 }
 
-function orderRefundAmount(order) {
-  if (['cancelled', 'canceled', 'invalid'].includes(String(order?.status || '').toLowerCase())) {
-    return orderItemsAmount(order, 'unit_price');
-  }
-  return (order?.payments || []).reduce((sum, payment) => {
-    const status = String(payment?.status || '').toLowerCase();
-    const refunded = Math.abs(num(payment?.transaction_amount_refunded ?? payment?.refunded_amount));
-    if (refunded) return sum + refunded;
-    if (['refunded', 'charged_back', 'cancelled', 'canceled'].includes(status)) {
-      return sum + Math.abs(num(payment?.transaction_amount || payment?.total_paid_amount));
-    }
-    return sum;
-  }, 0);
+function approvedPayment(payment) {
+  const status = String(payment?.status || '').toLowerCase();
+  return ['approved', 'paid', 'refunded', 'charged_back', 'partially_refunded'].includes(status)
+    || num(payment?.transaction_amount_refunded) > 0
+    || num(payment?.refunded_amount) > 0;
 }
+
+function orderWasFinanciallyCaptured(order) {
+  if (String(order?.status || '').toLowerCase() === 'paid') return true;
+  return (order?.payments || []).some(approvedPayment);
+}
+
+function orderRefundAmount(order) {
+  let refunded = 0;
+  for (const payment of order?.payments || []) {
+    const status = String(payment?.status || '').toLowerCase();
+    const explicit = Math.abs(num(payment?.transaction_amount_refunded ?? payment?.refunded_amount));
+    if (explicit) refunded += explicit;
+    else if (['refunded', 'charged_back'].includes(status)) {
+      refunded += Math.abs(num(payment?.transaction_amount || payment?.total_paid_amount));
+    }
+  }
+  return refunded;
+}
+
 export default async request => {
   try {
     const url = new URL(request.url);
@@ -250,7 +283,7 @@ export default async request => {
     const year = Number(url.searchParams.get('year') || new Date().getUTCFullYear());
     if (!Number.isInteger(year) || year < 2020 || year > 2100) return json({ error: 'Año inválido.' }, 400);
     const force = url.searchParams.get('refresh') === '1';
-    const cacheKey = `pnl-v9-reconciled-${year}`;
+    const cacheKey = `pnl-v10-reconciled-${year}`;
     const cached = await getCache(cacheKey);
     if (!force && cached?.createdAt && Date.now() - cached.createdAt < 30 * 60 * 1000) return json(cached.data);
 
@@ -274,15 +307,17 @@ export default async request => {
     const months = Array.from({ length: 12 }, (_, i) => monthTemplate(i));
     const orderIdsByMonth = Array.from({ length: 12 }, () => new Set());
 
-    // Ventas totales incluye las operaciones luego anuladas. Las anulaciones y
-    // devoluciones se muestran en una fila separada y se restan para llegar a ventas netas.
+    // Solo se consideran ventas que tuvieron captura financiera. Una orden cancelada
+    // antes de pagarse no es venta ni anulación contable. Las devoluciones se restan por
+    // el importe efectivamente reintegrado, evitando inflar la fila de anulaciones.
     for (const order of allOrders) {
+      if (!orderWasFinanciallyCaptured(order)) continue;
       const monthIndex = new Date(order.date_created).getUTCMonth();
       if (monthIndex < 0 || monthIndex > 11) continue;
       const amount = orderItemsAmount(order, 'unit_price');
-      const cancelled = Math.min(amount, orderRefundAmount(order));
+      const refunded = Math.min(amount, orderRefundAmount(order));
       months[monthIndex].totalSales += amount;
-      months[monthIndex].cancellations += cancelled;
+      months[monthIndex].cancellations += refunded;
     }
 
     for (const order of orders) {
@@ -325,7 +360,7 @@ export default async request => {
       let orderSettlement = { commission: 0, installments: 0, fixedCharge: 0, shipping: sellerShipping, otherMl: 0, paymentMl: 0, totalMl: 0 };
       for (const paymentSummary of payments) {
         const detail = paymentDetails.get(String(paymentSummary?.id));
-        const classified = detail ? classifyPayment(detail) : classifyOrderPaymentFallback(paymentSummary);
+        const classified = classifyPayment(detail ? { ...paymentSummary, ...detail } : paymentSummary);
         if (detail) target.settlementPayments += 1;
         else target.settlementFallbacks += 1;
         orderSettlement.commission += num(classified.commission);
@@ -410,7 +445,7 @@ export default async request => {
         unmatchedUnits: totals.unmatchedUnits || 0,
         costFile: costsRecord.fileName || null,
         costImportedAt: costsRecord.importedAt || null,
-        note: 'Ventas totales y anulaciones se obtienen de órdenes. Comisiones usan pagos y sale_fee como respaldo; cuotas y cargos se separan cuando Mercado Libre los identifica; envíos usan el costo real del remitente. Mercadería y packaging vienen del Excel. Los gastos externos son editables por mes.'
+        note: 'Solo cuentan como ventas las órdenes con pago capturado. Anulaciones y devoluciones usan importes efectivamente reintegrados. Se prueban varias rutas de detalle de pago y se combinan con sale_fee y el costo real del remitente. Los gastos externos son editables por mes.'
       }
     };
 
