@@ -1,9 +1,9 @@
 {
   "name": "rockos-intelligence",
-  "version": "8.0.0",
+  "version": "11.0.0",
   "private": true,
   "type": "module",
-  "description": "Rockos Intelligence V8: resultados mensuales conciliados con liquidaciones reales de Mercado Libre y gastos externos editables",
+  "description": "Rockos Intelligence V11: importación incremental de Base de Ventas ML, histórico sin duplicados y resultados financieros desde Excel oficial",
   "engines": {
     "node": ">=20"
   },

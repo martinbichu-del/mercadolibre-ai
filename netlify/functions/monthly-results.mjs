@@ -1,6 +1,6 @@
 import {
   json, meli, fetchOrders, paidOrders, startOfMonth, endOfMonth,
-  getCostsRecord, getPnlExpenses, savePnlExpenses, getCache, saveCache
+  getCostsRecord, getPnlExpenses, savePnlExpenses, getCache, saveCache, getSalesImportRecord
 } from './_shared.mjs';
 
 const num = value => {
@@ -262,6 +262,28 @@ function orderRefundAmount(order) {
   return refunded;
 }
 
+
+function buildMonthsFromImportedSales(record, year, costsRecord, expenses) {
+  const months = Array.from({ length: 12 }, (_, i) => monthTemplate(i));
+  const costsBySku = new Map((costsRecord.products || []).map(p => [normalizeSku(p.sku), p]));
+  const ids = Array.from({length:12},()=>new Set());
+  for (const row of record.rows || []) {
+    const date = new Date(row.date); if (date.getUTCFullYear() !== year) continue;
+    const i=date.getUTCMonth(), m=months[i], units=Math.max(0,num(row.units)); ids[i].add(String(row.saleId));
+    const productIncome=num(row.productIncome), cancellations=Math.abs(num(row.cancellationsRefunds));
+    const saleFee=Math.abs(num(row.saleFee)), fixed=Math.abs(num(row.fixedCost)), installments=Math.abs(num(row.installmentsCost));
+    const shipping=Math.max(0,Math.abs(num(row.shippingCost))-Math.abs(num(row.shippingIncome)));
+    const netSales=Math.max(0,productIncome-cancellations), reportedTotal=num(row.total);
+    const totalMl=Math.max(0,netSales-reportedTotal), known=saleFee+fixed+installments+shipping, other=Math.max(0,totalMl-known);
+    m.totalSales+=productIncome; m.cancellations+=cancellations; m.netSales+=netSales; m.units+=units;
+    m.commission+=saleFee; m.fixedCharge+=fixed; m.installments+=installments; m.shipping+=shipping; m.otherMl+=other; m.totalMl+=totalMl; m.netAfterMl+=reportedTotal;
+    const product=costsBySku.get(normalizeSku(row.sku));
+    if(product){m.matchedUnits+=units; const cost=num(product.cost), pack=num(product.packaging)||Math.max(0,num(product.costPack)-cost);m.merchandise+=cost*units;m.packaging+=pack*units}else m.unmatchedUnits+=units;
+  }
+  for(let i=0;i<12;i++){const m=months[i];m.orders=ids[i].size;m.listSales=m.totalSales+Math.max(0,m.discounts);m.totalProducts=m.merchandise+m.packaging;m.contribution=m.netAfterMl-m.totalProducts;m.operatingExpenses=expenseTotal(expenses,i);m.retentions=num(expenses.retenciones?.[i]);m.taxes=num(expenses.impuestos?.[i]);m.operatingResult=m.contribution-m.operatingExpenses;m.netResult=m.operatingResult-m.retentions-m.taxes}
+  return months;
+}
+
 export default async request => {
   try {
     const url = new URL(request.url);
@@ -291,19 +313,28 @@ export default async request => {
     const from = startOfMonth(year, 0);
     const yearEnd = endOfMonth(year, 11);
     const to = year === now.getUTCFullYear() ? now : yearEnd;
+    const [salesImport, costsRecord, expensesRecord] = await Promise.all([getSalesImportRecord(), getCostsRecord(), getPnlExpenses()]);
+    const expenses = { ...defaultExpenseYear(), ...(expensesRecord.years?.[String(year)] || {}) };
+    if ((salesImport.rows || []).some(r => new Date(r.date).getUTCFullYear() === year)) {
+      const months = buildMonthsFromImportedSales(salesImport, year, costsRecord, expenses);
+      const totals = months.reduce((acc,m)=>{for(const [k,v] of Object.entries(m))if(typeof v==='number'&&k!=='index')acc[k]=(acc[k]||0)+v;return acc},{});
+      const activeMonths=months.filter(m=>m.netSales||m.operatingExpenses||m.taxes||m.retentions).length||1;
+      const averages=Object.fromEntries(Object.entries(totals).map(([k,v])=>[k,v/activeMonths]));
+      const lastIndex=Math.min(year===now.getUTCFullYear()?now.getUTCMonth():11,11),currentMonth=months[lastIndex],previousMonth=months[Math.max(0,lastIndex-1)];
+      const variation=previousMonth.netResult?(currentMonth.netResult-previousMonth.netResult)/Math.abs(previousMonth.netResult):null;
+      const data={year,generatedAt:new Date().toISOString(),source:'Base de ventas descargada de Mercado Libre + Excel de costos + gastos externos manuales',months,totals,averages,activeMonths,expenses,currentSummary:{monthIndex:lastIndex,totalSales:currentMonth.totalSales,cancellations:currentMonth.cancellations,netSales:currentMonth.netSales,netAfterMl:currentMonth.netAfterMl,contribution:currentMonth.contribution,netResult:currentMonth.netResult,netMargin:currentMonth.netSales?currentMonth.netResult/currentMonth.netSales:null,variation},coverage:{orders:totals.orders||0,allOrders:totals.orders||0,settlementPayments:0,settlementFallbacks:0,matchedUnits:totals.matchedUnits||0,unmatchedUnits:totals.unmatchedUnits||0,costFile:costsRecord.fileName||null,costImportedAt:costsRecord.importedAt||null,salesFile:salesImport.lastImport?.fileName||null,salesImportedAt:salesImport.importedAt||null,note:'Los importes financieros provienen de la Base de Ventas de Mercado Libre. Las actualizaciones se fusionan por # de venta y nunca duplican operaciones.'}};
+      await saveCache({createdAt:Date.now(),data},cacheKey); return json(data);
+    }
     const user = await meli('/users/me');
     const allOrders = await fetchOrders({ sellerId: user.id, from, to });
     const orders = paidOrders(allOrders);
-    const [costsRecord, details, paymentDetails, shipmentCosts, expensesRecord] = await Promise.all([
-      getCostsRecord(),
+    const [details, paymentDetails, shipmentCosts] = await Promise.all([
       itemDetailsFor(orders),
       fetchPaymentDetails(orders),
-      fetchShipmentSellerCosts(orders),
-      getPnlExpenses()
+      fetchShipmentSellerCosts(orders)
     ]);
 
     const costsBySku = new Map((costsRecord.products || []).map(p => [normalizeSku(p.sku), p]));
-    const expenses = { ...defaultExpenseYear(), ...(expensesRecord.years?.[String(year)] || {}) };
     const months = Array.from({ length: 12 }, (_, i) => monthTemplate(i));
     const orderIdsByMonth = Array.from({ length: 12 }, () => new Set());
 

@@ -5,6 +5,7 @@ const CACHE_KEY = 'dashboard-cache';
 const COSTS_KEY = 'product-costs';
 const SETTINGS_KEY = 'business-settings';
 const PNL_EXPENSES_KEY = 'pnl-monthly-expenses';
+const SALES_IMPORT_KEY = 'sales-import-master';
 
 export const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -140,6 +141,18 @@ export async function saveCostsRecord(record) {
   await clearCache();
 }
 
+
+
+export async function getSalesImportRecord() {
+  return (await store().get(SALES_IMPORT_KEY, { type: 'json' })) || {
+    importedAt: null, rows: [], files: [], period: { from: null, to: null }
+  };
+}
+
+export async function saveSalesImportRecord(record) {
+  await store().setJSON(SALES_IMPORT_KEY, record);
+  await clearCache();
+}
 
 export async function getPnlExpenses() {
   return (await store().get(PNL_EXPENSES_KEY, { type: 'json' })) || { years: {} };
